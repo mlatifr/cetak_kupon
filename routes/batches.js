@@ -1,6 +1,7 @@
 var express = require('express');
 var router = express.Router();
 var config = require('../config');
+const { getProductionReport, formatProductionReport } = require('../utils/reportGenerator');
 
 // GET semua batch
 router.get('/', function(req, res, next) {
@@ -35,8 +36,84 @@ router.get('/', function(req, res, next) {
     if (error) {
       return res.status(500).json({ error: error.message });
     }
-    res.json(results);
+    
+    // Tambahkan informasi jumlah kupon untuk setiap batch
+    if (results.length === 0) {
+      return res.json([]);
+    }
+    
+    // Gunakan LEFT JOIN untuk mendapatkan jumlah kupon sekaligus
+    const batchIds = results.map(b => b.batch_id);
+    const placeholders = batchIds.map(() => '?').join(',');
+    const couponCountQuery = `
+      SELECT batch_id, COUNT(*) as count 
+      FROM coupons 
+      WHERE batch_id IN (${placeholders})
+      GROUP BY batch_id
+    `;
+    
+    config.query(couponCountQuery, batchIds, function(couponError, couponCounts) {
+      // Buat map untuk lookup cepat
+      const couponCountMap = {};
+      if (!couponError && couponCounts) {
+        couponCounts.forEach(row => {
+          couponCountMap[row.batch_id] = row.count;
+        });
+      }
+      
+      // Tambahkan info jumlah kupon ke setiap batch
+      const batchesWithCoupons = results.map(batch => {
+        const count = couponCountMap[batch.batch_id] || 0;
+        return {
+          ...batch,
+          total_coupons: count,
+          has_coupons: count > 0
+        };
+      });
+      
+      res.json(batchesWithCoupons);
+    });
   });
+});
+
+// GET /api/batches/:batch_number/report - Laporan detail produksi per batch
+// HARUS diletakkan sebelum route /:batch_number agar tidak tertangkap sebagai parameter
+router.get('/:batch_number/report', function(req, res, next) {
+    const batchNumber = req.params.batch_number;
+    
+    // Ambil batch_id dari batch_number
+    config.query('SELECT batch_id FROM batches WHERE batch_number = ?', [batchNumber], async function(error, batchResults) {
+        if (error) {
+            return res.status(500).json({ error: error.message });
+        }
+        if (batchResults.length === 0) {
+            return res.status(404).json({ error: 'Batch tidak ditemukan' });
+        }
+        
+        const batchId = batchResults[0].batch_id;
+        
+        try {
+            const batchData = await getProductionReport(batchId, config);
+            
+            if (!batchData) {
+                return res.status(404).json({ error: 'Data kupon untuk batch ini tidak ditemukan' });
+            }
+            
+            const report = formatProductionReport(batchData);
+            
+            res.json({
+                success: true,
+                data: batchData,
+                formattedReport: report
+            });
+        } catch (reportError) {
+            res.status(500).json({
+                success: false,
+                message: 'Error generating report',
+                error: reportError.message
+            });
+        }
+    });
 });
 
 // GET batch by batch_number
@@ -139,16 +216,16 @@ router.put('/:batch_number', function(req, res, next) {
 
 // DELETE batch
 router.delete('/:batch_number', function(req, res, next) {
-  const batchNumber = req.params.batch_number;
-  config.query('DELETE FROM batches WHERE batch_number = ?', [batchNumber], function(error, results, fields) {
-    if (error) {
-      return res.status(500).json({ error: error.message });
-    }
-    if (results.affectedRows === 0) {
-      return res.status(404).json({ error: 'Batch tidak ditemukan' });
-    }
-    res.json({ message: 'Batch berhasil dihapus' });
-  });
+    const batchNumber = req.params.batch_number;
+    config.query('DELETE FROM batches WHERE batch_number = ?', [batchNumber], function(error, results, fields) {
+        if (error) {
+            return res.status(500).json({ error: error.message });
+        }
+        if (results.affectedRows === 0) {
+            return res.status(404).json({ error: 'Batch tidak ditemukan' });
+        }
+        res.json({ message: 'Batch berhasil dihapus' });
+    });
 });
 
 module.exports = router;

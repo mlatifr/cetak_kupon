@@ -1,6 +1,7 @@
 var express = require('express');
 var router = express.Router();
 var config = require('../config');
+const { runQCValidation, formatValidationDescription } = require('../utils/qcValidator');
 
 // GET semua validasi QC
 router.get('/', function(req, res, next) {
@@ -31,7 +32,13 @@ router.get('/', function(req, res, next) {
     if (error) {
       return res.status(500).json({ error: error.message });
     }
-    res.json(results);
+    // Format description untuk setiap hasil
+    const formattedResults = results.map(row => {
+      const formatted = { ...row };
+      formatted.description = formatValidationDescription(row.validation_type, row.validation_details);
+      return formatted;
+    });
+    res.json(formattedResults);
   });
 });
 
@@ -45,7 +52,10 @@ router.get('/:id', function(req, res, next) {
     if (results.length === 0) {
       return res.status(404).json({ error: 'Validasi QC tidak ditemukan' });
     }
-    res.json(results[0]);
+    // Format description
+    const result = results[0];
+    result.description = formatValidationDescription(result.validation_type, result.validation_details);
+    res.json(result);
   });
 });
 
@@ -56,7 +66,13 @@ router.get('/batch/:batch_id', function(req, res, next) {
     if (error) {
       return res.status(500).json({ error: error.message });
     }
-    res.json(results);
+    // Format description untuk setiap hasil
+    const formattedResults = results.map(row => {
+      const formatted = { ...row };
+      formatted.description = formatValidationDescription(row.validation_type, row.validation_details);
+      return formatted;
+    });
+    res.json(formattedResults);
   });
 });
 
@@ -109,6 +125,57 @@ router.delete('/:id', function(req, res, next) {
     }
     res.json({ message: 'Validasi QC berhasil dihapus' });
   });
+});
+
+// POST menjalankan validasi QC otomatis untuk batch
+router.post('/batch/:batch_id/validate', async function(req, res, next) {
+  const batchId = req.params.batch_id;
+  
+  try {
+    // Cek apakah batch ada
+    config.query('SELECT batch_id FROM batches WHERE batch_id = ?', [batchId], async function(error, batchResults) {
+      if (error) {
+        return res.status(500).json({ error: error.message });
+      }
+      if (batchResults.length === 0) {
+        return res.status(404).json({ error: 'Batch tidak ditemukan' });
+      }
+
+      // Cek apakah kupon sudah ada untuk batch ini
+      config.query('SELECT COUNT(*) as count FROM coupons WHERE batch_id = ?', [batchId], async function(error, couponResults) {
+        if (error) {
+          return res.status(500).json({ error: error.message });
+        }
+        if (couponResults[0].count === 0) {
+          return res.status(400).json({ error: 'Batch belum memiliki kupon. Generate kupon terlebih dahulu.' });
+        }
+
+        try {
+          // Jalankan validasi QC
+          const validationResults = await runQCValidation(batchId, config);
+          
+          res.json({
+            success: true,
+            message: 'Validasi QC berhasil dijalankan',
+            batch_id: batchId,
+            results: validationResults
+          });
+        } catch (validationError) {
+          res.status(500).json({
+            success: false,
+            message: 'Error menjalankan validasi QC',
+            error: validationError.message
+          });
+        }
+      });
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Error menjalankan validasi QC',
+      error: error.message
+    });
+  }
 });
 
 module.exports = router;
