@@ -3,6 +3,47 @@ var router = express.Router();
 var config = require('../config');
 const { runQCValidation, formatValidationDescription } = require('../utils/qcValidator');
 
+/**
+ * Helper function untuk memastikan validation_details selalu dalam format JSON string yang valid
+ * @param {any} validationDetails - Data validation_details dari request body
+ * @returns {string|null} - JSON string yang valid atau null
+ */
+function normalizeValidationDetails(validationDetails) {
+  // Jika null atau undefined, return null
+  if (validationDetails === null || validationDetails === undefined) {
+    return null;
+  }
+
+  // Jika sudah string, cek apakah valid JSON
+  if (typeof validationDetails === 'string') {
+    // Jika string kosong, return null
+    if (validationDetails.trim() === '') {
+      return null;
+    }
+    // Cek apakah string adalah JSON yang valid
+    try {
+      JSON.parse(validationDetails);
+      return validationDetails; // Sudah valid JSON string
+    } catch (e) {
+      // Jika bukan JSON valid, wrap dalam object dengan message
+      return JSON.stringify({ message: validationDetails });
+    }
+  }
+
+  // Jika object atau array, stringify
+  if (typeof validationDetails === 'object') {
+    try {
+      return JSON.stringify(validationDetails);
+    } catch (e) {
+      // Jika gagal stringify, return default
+      return JSON.stringify({ message: 'Invalid validation details format' });
+    }
+  }
+
+  // Untuk tipe lain (number, boolean, dll), wrap dalam object
+  return JSON.stringify({ value: validationDetails });
+}
+
 // GET semua validasi QC
 router.get('/', function(req, res, next) {
   const { batch_id, validation_status, validated_by, validated_by_user_id } = req.query;
@@ -84,8 +125,11 @@ router.post('/', function(req, res, next) {
     return res.status(400).json({ error: 'batch_id, validation_type, dan validation_status wajib diisi' });
   }
 
+  // Normalize validation_details untuk memastikan format JSON string yang valid
+  const normalizedValidationDetails = normalizeValidationDetails(validation_details);
+
   const query = 'INSERT INTO qc_validations (batch_id, validation_type, validation_status, validation_details, validated_by, validated_by_user_id) VALUES (?, ?, ?, ?, ?, ?)';
-  config.query(query, [batch_id, validation_type, validation_status, validation_details, validated_by, validated_by_user_id], function(error, results, fields) {
+  config.query(query, [batch_id, validation_type, validation_status, normalizedValidationDetails, validated_by, validated_by_user_id], function(error, results, fields) {
     if (error) {
       return res.status(500).json({ error: error.message });
     }
@@ -101,8 +145,11 @@ router.put('/:id', function(req, res, next) {
   const qcId = req.params.id;
   const { validation_type, validation_status, validation_details, validated_by, validated_by_user_id } = req.body;
 
+  // Normalize validation_details untuk memastikan format JSON string yang valid
+  const normalizedValidationDetails = normalizeValidationDetails(validation_details);
+
   const query = 'UPDATE qc_validations SET validation_type = ?, validation_status = ?, validation_details = ?, validated_by = ?, validated_by_user_id = ? WHERE qc_id = ?';
-  config.query(query, [validation_type, validation_status, validation_details, validated_by, validated_by_user_id, qcId], function(error, results, fields) {
+  config.query(query, [validation_type, validation_status, normalizedValidationDetails, validated_by, validated_by_user_id, qcId], function(error, results, fields) {
     if (error) {
       return res.status(500).json({ error: error.message });
     }
